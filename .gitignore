@@ -1,0 +1,29 @@
+# Supabase
+.supabase/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Supabase secrets
+supabase/.env
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Deno
+.deno/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
