@@ -34,6 +34,13 @@ const GROUPS = [
 ];
 
 Deno.serve(async () => {
+  const delays = [0, 10, 20, 30, 40, 50];
+  const delay = delays[Math.floor(Math.random() * delays.length)];
+
+  if (delay > 0) {
+    console.log(`Delaying ${delay} seconds before syncing...`);
+    await new Promise((resolve) => setTimeout(resolve, delay * 1000));
+  }
   const token = await getToken();
   let totalSynced = 0;
 
