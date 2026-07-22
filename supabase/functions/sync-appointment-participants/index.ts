@@ -64,12 +64,13 @@ Deno.serve(async () => {
   const in35min = new Date(now.getTime() + 35 * 60 * 1000).toISOString();
 
   // 1. Check DB first — no login yet
-  const { data: upcoming, error: fetchErr } = await supabase
-    .from("appointment")
-    .select("id, max_participants, master_company_id")
-    .eq("checked", false)
-    .gte("start_date || 'T' || start_time", now.toISOString())
-    .lte("start_date || 'T' || start_time", in35min);
+  const { data: upcoming, error: fetchErr } = await supabase.rpc(
+  "get_upcoming_unchecked_appointments",
+  {
+    from_time: now.toISOString(),
+    to_time: in35min,
+  }
+  );
 
   // 2. If nothing upcoming, exit early — no login needed
   if (fetchErr || !upcoming?.length) {
