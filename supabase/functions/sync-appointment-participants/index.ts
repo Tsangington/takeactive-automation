@@ -61,14 +61,13 @@ const GROUPS = [
 
 Deno.serve(async () => {
   const now = new Date();
-  const in35min = new Date(now.getTime() + 35 * 60 * 1000).toISOString();
+  const in20min = new Date(now.getTime() + 20 * 60 * 1000).toISOString();
 
-  // 1. Check DB first — no login yet
   const { data: upcoming, error: fetchErr } = await supabase.rpc(
   "get_upcoming_unchecked_appointments",
   {
     from_time: now.toISOString(),
-    to_time: in35min,
+    to_time: in20min,
   }
   );
 
