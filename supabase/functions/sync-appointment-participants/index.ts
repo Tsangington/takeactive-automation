@@ -113,7 +113,7 @@ Deno.serve(async () => {
     for (const p of sorted) {
       const memberId = String(p.user_id);
       const memberName = p.user?.username ?? "Unknown";
-      const isCancelled = !!p.canceled_at;
+      const isCancelled = !!p.canceled_at && p.canceled_at !== "";
 
       // 7a. Sync user — insert if new, update name if changed
       await syncUser(memberId, memberName);
