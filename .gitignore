@@ -27,3 +27,5 @@ Thumbs.db
 *.ntvs*
 *.njsproj
 *.sln
+
+service-account.json
