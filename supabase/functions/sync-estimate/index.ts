@@ -14,10 +14,19 @@ function pemToArrayBuffer(pem: string): ArrayBuffer {
   return Uint8Array.from(bin, (c) => c.charCodeAt(0)).buffer;
 }
 
+function base64url(input: string | ArrayBuffer): string {
+  const bytes = typeof input === "string"
+    ? new TextEncoder().encode(input)
+    : new Uint8Array(input);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 async function getGoogleToken(): Promise<string> {
-  const header = btoa(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
   const now = Math.floor(Date.now() / 1000);
-  const claim = btoa(JSON.stringify({
+  const claim = base64url(JSON.stringify({
     iss: GOOGLE_SERVICE_ACCOUNT.client_email,
     scope: "https://www.googleapis.com/auth/spreadsheets",
     aud: "https://oauth2.googleapis.com/token",
@@ -25,9 +34,10 @@ async function getGoogleToken(): Promise<string> {
     iat: now,
   }));
 
+  const privateKey = GOOGLE_SERVICE_ACCOUNT.private_key.replace(/\\n/g, "\n");
   const key = await crypto.subtle.importKey(
     "pkcs8",
-    pemToArrayBuffer(GOOGLE_SERVICE_ACCOUNT.private_key),
+    pemToArrayBuffer(privateKey),
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
     false,
     ["sign"]
@@ -39,7 +49,7 @@ async function getGoogleToken(): Promise<string> {
     new TextEncoder().encode(`${header}.${claim}`)
   );
 
-  const jwt = `${header}.${claim}.${btoa(String.fromCharCode(...new Uint8Array(sig)))}`;
+  const jwt = `${header}.${claim}.${base64url(sig)}`;
 
   const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -47,8 +57,52 @@ async function getGoogleToken(): Promise<string> {
     body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
   });
 
-  const { access_token } = await tokenRes.json();
-  return access_token;
+  const tokenData = await tokenRes.json();
+  if (!tokenRes.ok || !tokenData.access_token) {
+    throw new Error(`Google token failed: ${JSON.stringify(tokenData)}`);
+  }
+  return tokenData.access_token as string;
+}
+
+async function resolveSheetTitle(token: string): Promise<string> {
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}?fields=sheets.properties.title`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(`Failed to read spreadsheet: ${JSON.stringify(data)}`);
+  }
+  const title = data.sheets?.[0]?.properties?.title;
+  if (!title) {
+    throw new Error("Spreadsheet has no sheets");
+  }
+  return title as string;
+}
+
+async function writeSheet(token: string, range: string, values: unknown[][]): Promise<void> {
+  const clearRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}:clear`,
+    { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!clearRes.ok) {
+    throw new Error(`Sheet clear failed: ${await clearRes.text()}`);
+  }
+
+  const writeRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=RAW`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ values }),
+    }
+  );
+  if (!writeRes.ok) {
+    throw new Error(`Sheet write failed: ${await writeRes.text()}`);
+  }
 }
 
 function getLastWeekRange(): { from: string; to: string } {
@@ -79,66 +133,66 @@ function weeksRemainingInYear(): number {
 }
 
 Deno.serve(async () => {
-  const { from, to } = getLastWeekRange();
-  const weeksLeft = weeksRemainingInYear();
+  try {
+    const { from, to } = getLastWeekRange();
+    const weeksLeft = weeksRemainingInYear();
 
-  const { data: members, error: membersErr } = await supabase
-    .from("member")
-    .select("id, name, event_count")
-    .order("event_count", { ascending: false });
+    const { data: members, error: membersErr } = await supabase
+      .from("member")
+      .select("id, name, event_count")
+      .order("event_count", { ascending: false });
 
-  if (membersErr || !members) {
-    return new Response("Failed to fetch members", { status: 500 });
-  }
-
-  const { data: lastWeek, error: lwErr } = await supabase
-    .from("appointment_participant")
-    .select("member_id, appointment!inner(start_date)")
-    .eq("status", "attended")
-    .gte("appointment.start_date", from)
-    .lte("appointment.start_date", to);
-
-  if (lwErr) {
-    return new Response("Failed to fetch last week data", { status: 500 });
-  }
-
-  const sessionsLastWeek = new Map<string, number>();
-  for (const row of lastWeek ?? []) {
-    const count = sessionsLastWeek.get(row.member_id) ?? 0;
-    sessionsLastWeek.set(row.member_id, count + 1);
-  }
-
-  const values = [
-    ["Name", "Events Attended", "Sessions Last Week", "Est. Sessions / Year"],
-    ...members.map((m) => {
-      const lastWeekCount = sessionsLastWeek.get(m.id) ?? 0;
-      const estimated = weeksLeft * lastWeekCount + m.event_count;
-      return [m.name, m.event_count, lastWeekCount, estimated];
-    }),
-  ];
-
-  const token = await getGoogleToken();
-  const range = "Sheet1!A1:D";
-
-  await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}:clear`,
-    { method: "POST", headers: { Authorization: `Bearer ${token}` } }
-  );
-
-  await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?valueInputOption=RAW`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ values }),
+    if (membersErr || !members) {
+      return new Response(
+        JSON.stringify({ error: "Failed to fetch members", details: membersErr?.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
     }
-  );
 
-  return new Response(
-    JSON.stringify({ written: members.length, weeksLeft, from, to }),
-    { headers: { "Content-Type": "application/json" } }
-  );
+    const { data: lastWeek, error: lwErr } = await supabase
+      .from("appointment_participant")
+      .select("member_id, appointment!inner(start_date)")
+      .eq("status", "attended")
+      .gte("appointment.start_date", from)
+      .lte("appointment.start_date", to);
+
+    if (lwErr) {
+      return new Response(
+        JSON.stringify({ error: "Failed to fetch last week data", details: lwErr.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    const sessionsLastWeek = new Map<string, number>();
+    for (const row of lastWeek ?? []) {
+      const count = sessionsLastWeek.get(row.member_id) ?? 0;
+      sessionsLastWeek.set(row.member_id, count + 1);
+    }
+
+    const values = [
+      ["Name", "Events Attended", "Sessions Last Week", "Est. Sessions / Year"],
+      ...members.map((m) => {
+        const lastWeekCount = sessionsLastWeek.get(m.id) ?? 0;
+        const estimated = weeksLeft * lastWeekCount + m.event_count;
+        return [m.name, m.event_count, lastWeekCount, estimated];
+      }),
+    ];
+
+    const token = await getGoogleToken();
+    const sheetTitle = await resolveSheetTitle(token);
+    const range = `${sheetTitle}!A1:D`;
+    await writeSheet(token, range, values);
+
+    return new Response(
+      JSON.stringify({ written: members.length, weeksLeft, from, to, sheet: sheetTitle }),
+      { headers: { "Content-Type": "application/json" } }
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(message);
+    return new Response(
+      JSON.stringify({ error: message }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
 });

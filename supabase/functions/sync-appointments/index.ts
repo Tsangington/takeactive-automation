@@ -25,11 +25,11 @@ async function getToken(): Promise<string> {
 const GROUPS = [
   {
     base: Deno.env.get("TAKEACTIVE_API_BASE_1")!,
-    group: "vfb-kiefholz-league-team",
+    group: "badminton-treptow",
   },
   {
     base: Deno.env.get("TAKEACTIVE_API_BASE_2")!,
-    group: "badminton-treptow",
+    group: "vfb-kiefholz-league-team",
   },
 ];
 
@@ -57,6 +57,8 @@ Deno.serve(async () => {
     const appointments: any[] = await res.json();
     const active = appointments.filter((a) => a.status === "ACTIVE");
 
+    // Do not include `checked` — upserting checked:false was resetting
+    // appointments already processed by sync-appointment-participants.
     const rows = active.map((a) => ({
       id: String(a.id),
       name: a.name,
@@ -64,7 +66,6 @@ Deno.serve(async () => {
       start_time: a.appointment.split("T")[1],
       max_participants: a.max_participant,
       master_company_id: a.master_company_id,
-      checked: false,
     }));
 
     const { error } = await supabase
