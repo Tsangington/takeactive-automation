@@ -42,3 +42,15 @@ entrypoint = "./functions/sync-estimate/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/sync-estimate/*.html" ]
+
+[functions.backfill-appointments]
+enabled = true
+verify_jwt = false
+import_map = "./functions/backfill-appointments/deno.json"
+entrypoint = "./functions/backfill-appointments/index.ts"
+
+[functions.backfill-appointment-participants]
+enabled = true
+verify_jwt = false
+import_map = "./functions/backfill-appointment-participants/deno.json"
+entrypoint = "./functions/backfill-appointment-participants/index.ts"

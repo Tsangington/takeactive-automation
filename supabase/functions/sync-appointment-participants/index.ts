@@ -1,29 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getToken } from "../_shared/takeactiveAuth.ts";
+import { appointmentDetailUrl, groupForMaster } from "../_shared/takeactiveGroups.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
-
-async function getToken(): Promise<string> {
-  const res = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${Deno.env.get("TAKEACTIVE_FIREBASE_KEY")}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: Deno.env.get("TAKEACTIVE_EMAIL"),
-        password: Deno.env.get("TAKEACTIVE_PASSWORD"),
-        returnSecureToken: true,
-      }),
-    }
-  );
-  const data = await res.json();
-  if (!data.idToken) {
-    throw new Error(`Firebase login failed: ${JSON.stringify(data)}`);
-  }
-  return data.idToken;
-}
 
 async function syncUser(memberId: string, apiName: string): Promise<void> {
   const { data: existing, error: selectErr } = await supabase
@@ -58,19 +40,6 @@ async function syncUser(memberId: string, apiName: string): Promise<void> {
   }
 }
 
-// BASE_1 / BASE_2 must match the company baked into each secret URL.
-// (Previously these were swapped, so BADMINTON ids were fetched from the VFB base → 400 permission denied.)
-const GROUPS = [
-  {
-    base: Deno.env.get("TAKEACTIVE_API_BASE_1")!,
-    master: "BADMINTON-TREPTOW",
-  },
-  {
-    base: Deno.env.get("TAKEACTIVE_API_BASE_2")!,
-    master: "VFB-KIEFHOLZ-LEAGUE-TEAM",
-  },
-];
-
 Deno.serve(async () => {
   try {
     const now = new Date();
@@ -98,27 +67,20 @@ Deno.serve(async () => {
       );
     }
 
-    const token = await getToken();
     const results: Array<Record<string, unknown>> = [];
 
     for (const appt of upcoming) {
-      const groupConfig = GROUPS.find((g) => g.master === appt.master_company_id);
+      const group = groupForMaster(appt.master_company_id);
 
-      if (!groupConfig) {
+      if (!group) {
         const msg = `No group config for master_company_id=${appt.master_company_id}`;
         console.error(msg);
         results.push({ appointment_id: appt.id, status: "skipped", reason: msg });
         continue;
       }
 
-      if (!groupConfig.base) {
-        const msg = `API base env missing for ${appt.master_company_id}`;
-        console.error(msg);
-        results.push({ appointment_id: appt.id, status: "skipped", reason: msg });
-        continue;
-      }
-
-      const detailUrl = `${groupConfig.base.replace(/\/$/, "")}/${appt.id}`;
+      const token = await getToken();
+      const detailUrl = appointmentDetailUrl(group, String(appt.id));
       const res = await fetch(detailUrl, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -180,6 +142,7 @@ Deno.serve(async () => {
             member_id: memberId,
             status,
             booked_at: p.booked_at,
+            canceled_at: p.canceled_at || null,
           },
           { onConflict: "appointment_id,member_id" }
         );
@@ -190,15 +153,6 @@ Deno.serve(async () => {
           );
         }
         upserted++;
-
-        if (status === "attended") {
-          const { error: incErr } = await supabase.rpc("increment_event_count", {
-            member_id_input: memberId,
-          });
-          if (incErr) {
-            throw new Error(`increment_event_count failed for ${memberId}: ${incErr.message}`);
-          }
-        }
       }
 
       const { error: checkErr } = await supabase
