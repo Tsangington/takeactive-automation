@@ -1,0 +1,22 @@
+[
+  {"id":87660,"name":"@ Baumschulenweg, Sun 12:00 - 14:30, Badminton for all, play time plus coached training with Abhi)","appointment":"2025-12-28T12:00:00","max_participant":8,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87652,"name":"@ PlänterWALD, play Badminton, together with MEETUP, for less advanced, Sun 12:00-14:00","appointment":"2025-12-28T12:00:00","max_participant":6,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87738,"name":"PICKLEBALL @Baumschulenweg gym, Sun 12:00 - 14:30, on 2 courts","appointment":"2025-12-28T12:00:00","max_participant":12,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87658,"name":"@ PlänterWALD, play Badminton, together with MEETUP, for ADVANCED, Sun 10:00-12:00","appointment":"2025-12-28T10:00:00","max_participant":12,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":88303,"name":"@HÄNSELSTR, coached training for slightly advanced, SUN 10:00-12:00","appointment":"2025-12-28T10:00:00","max_participant":16,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87653,"name":"@ Plänterwald, early Sunday Badminton, 8:30-10:00","appointment":"2025-12-28T08:30:00","max_participant":15,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87561,"name":"@ PlänterWALD, play Badminton, Sat 18:00-21:00","appointment":"2025-12-27T18:00:00","max_participant":18,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87560,"name":"@ PlänterWALD, play Badminton, all levels, Sat 15:00-18:00","appointment":"2025-12-27T15:00:00","max_participant":22,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87628,"name":"@ BaumschulenWEG, coached TRAINING intermediate level, Saturday 14:30-16:30","appointment":"2025-12-27T14:30:00","max_participant":12,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87565,"name":"@ PlänterWALD, play Badminton, all levels, Sat 13:00-15:00","appointment":"2025-12-27T13:00:00","max_participant":22,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87558,"name":"@ PlänterWALD, play Badminton, all levels, Sat 11:00-13:00","appointment":"2025-12-27T11:00:00","max_participant":22,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87626,"name":"@ HÄNSELSTRAßE, coached training for ADULT BEGINNERS /  LESS ADVANCED, Sat 10:30-12:00","appointment":"2025-12-27T10:30:00","max_participant":16,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87566,"name":"@ HÄNSELSTRAßE, coached CHILDREN TRAINING, Sat 10:30-12:00","appointment":"2025-12-27T10:30:00","max_participant":12,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87569,"name":"@ PlänterWALD, play Badminton + coaching, beginners and less advanced are welcome here, Sat 9:00-11:00","appointment":"2025-12-27T09:00:00","max_participant":8,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87489,"name":"@ FRIEDRICHSHAIN, play Badminton, level: from mid advanced, Fri 20:00-22:00","appointment":"2025-12-26T20:00:00","max_participant":14,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87514,"name":"@ BaumschulenWEG, play Badminton, all levels, Fri 19:30-22:00","appointment":"2025-12-26T19:30:00","max_participant":18,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87553,"name":" Baumschulenweg, Badminton for all, Fri 17:00 - 19:30","appointment":"2025-12-26T17:00:00","max_participant":17,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":88462,"name":"@ Hänselstraße, Badminton for all, this Thursday, 19:00 - 21:30","appointment":"2025-12-25T19:00:00","max_participant":32,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":88461,"name":"@ Hänselstraße, Badminton for all, this Thursday 16:00 - 20:00","appointment":"2025-12-25T16:00:00","max_participant":32,"master_company_id":"BADMINTON-TREPTOW"},
+  {"id":87364,"name":"@ BaumschulenWEG, play Badminton, all levels, Wed 20:00-22:00","appointment":"2025-12-24T20:00:00","max_participant":23,"master_company_id":"BADMINTON-TREPTOW"}
+]
