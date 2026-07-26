@@ -94,16 +94,10 @@ Deno.serve(async () => {
       }
 
       const data = await res.json();
+      // Empty array / empty participants means nobody attended — still mark checked.
       const participants: any[] = Array.isArray(data)
-        ? []
+        ? data
         : (data.participants ?? data.participant ?? []);
-
-      if (Array.isArray(data) && participants.length === 0) {
-        const msg = `API returned an array instead of appointment detail for ${detailUrl}`;
-        console.error(msg);
-        results.push({ appointment_id: appt.id, status: "skipped", reason: msg });
-        continue;
-      }
 
       const sorted = [...participants].sort((a, b) => {
         if (a.canceled_at && !b.canceled_at) return 1;

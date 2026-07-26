@@ -9,37 +9,109 @@ import {
   sleep,
 } from "../_shared/takeactiveGroups.ts";
 
+const DEFAULT_LIMIT = 20;
+const FUNCTION_NAME = "backfill-appointment-participants";
+
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
 
+type AfterCursor = {
+  start_date: string;
+  start_time: string;
+  id: string;
+};
+
+function berlinNowString(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Berlin",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}`;
+}
+
+function apptKey(appt: { start_date: string; start_time: string; id: string }): string {
+  return `${appt.start_date}T${String(appt.start_time).slice(0, 8)}|${appt.id}`;
+}
+
+function isAfterCursor(
+  appt: { start_date: string; start_time: string; id: string },
+  after: AfterCursor
+): boolean {
+  return apptKey(appt) > apptKey(after);
+}
+
+function scheduleBackground(task: Promise<unknown>): void {
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } })
+    .EdgeRuntime;
+  if (runtime?.waitUntil) {
+    runtime.waitUntil(task);
+  }
+}
+
+function reinvokeSelf(body: Record<string, unknown>): Promise<unknown> {
+  const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/${FUNCTION_NAME}`;
+  const key =
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY");
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  }).then(async (res) => {
+    const text = await res.text();
+    if (!res.ok) {
+      console.error(`reinvoke failed: ${res.status} ${text.slice(0, 300)}`);
+    }
+  });
+}
+
 async function syncUser(memberId: string, apiName: string): Promise<void> {
-  const { data: existing, error: selectErr } = await supabase
+  const selectRes = await supabase
     .from("member")
     .select("name")
     .eq("id", memberId)
     .maybeSingle();
 
-  if (selectErr) {
-    throw new Error(`member select failed for ${memberId}: ${selectErr.message}`);
+  if (!selectRes) {
+    throw new Error(`member select returned undefined for ${memberId}`);
+  }
+  if (selectRes.error) {
+    throw new Error(`member select failed for ${memberId}: ${selectRes.error.message}`);
   }
 
+  const existing = selectRes.data;
   if (!existing) {
-    const { error } = await supabase.from("member").insert({
+    const insertRes = await supabase.from("member").insert({
       id: memberId,
       name: apiName,
       event_count: 0,
     });
-    if (error) {
-      throw new Error(`member insert failed for ${memberId}: ${error.message}`);
+    if (!insertRes) {
+      throw new Error(`member insert returned undefined for ${memberId}`);
+    }
+    if (insertRes.error) {
+      throw new Error(`member insert failed for ${memberId}: ${insertRes.error.message}`);
     }
   } else if (existing.name !== apiName) {
-    const { error } = await supabase.from("member")
+    const updateRes = await supabase.from("member")
       .update({ name: apiName })
       .eq("id", memberId);
-    if (error) {
-      throw new Error(`member update failed for ${memberId}: ${error.message}`);
+    if (!updateRes) {
+      throw new Error(`member update returned undefined for ${memberId}`);
+    }
+    if (updateRes.error) {
+      throw new Error(`member update failed for ${memberId}: ${updateRes.error.message}`);
     }
   }
 }
@@ -49,9 +121,20 @@ Deno.serve(async (req) => {
     resetTokenCache();
     const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
     const force = body.force !== false; // default true
+    // When true: only appointments with checked=false that have already started.
+    const uncheckedOnly = body.unchecked_only === true;
+    const limit = Number(body.limit) > 0 ? Math.floor(Number(body.limit)) : DEFAULT_LIMIT;
+    const after: AfterCursor | null =
+      body.after?.start_date && body.after?.id
+        ? {
+            start_date: String(body.after.start_date),
+            start_time: String(body.after.start_time ?? "00:00:00"),
+            id: String(body.after.id),
+          }
+        : null;
 
     let defaultTo = berlinToday();
-    if (!body.to) {
+    if (!body.to && !uncheckedOnly) {
       // Extend through latest not-yet-started appointment in DB.
       const { data: upcoming } = await supabase
         .from("appointment")
@@ -71,33 +154,56 @@ Deno.serve(async (req) => {
       to: defaultTo,
     });
 
-    const { data: appointments, error: apptErr } = await supabase
+    let query = supabase
       .from("appointment")
-      .select("id, max_participants, master_company_id, start_date, start_time")
+      .select("id, max_participants, master_company_id, start_date, start_time, checked")
       .gte("start_date", from)
       .lte("start_date", to)
       .order("start_date", { ascending: true })
       .order("start_time", { ascending: true });
 
+    if (uncheckedOnly) {
+      query = query.eq("checked", false);
+    }
+
+    const { data: appointments, error: apptErr } = await query;
+
     if (apptErr) {
       throw new Error(`Failed to load appointments: ${apptErr.message}`);
     }
+
+    const berlinNowStr = berlinNowString();
+
+    const filtered = (appointments ?? []).filter((appt) => {
+      if (uncheckedOnly) {
+        const startStr = `${appt.start_date}T${String(appt.start_time).slice(0, 8)}`;
+        if (!(startStr < berlinNowStr)) return false;
+      }
+      if (after && !isAfterCursor(appt, after)) return false;
+      return true;
+    });
+
+    const batch = filtered.slice(0, limit);
+    const hasMore = filtered.length > limit;
 
     const results: Array<Record<string, unknown>> = [];
     let fetched = 0;
     let skipped = 0;
 
-    for (const appt of appointments ?? []) {
+    for (const appt of batch) {
       if (!force) {
-        const { count, error: countErr } = await supabase
+        const countRes = await supabase
           .from("appointment_participant")
           .select("id", { count: "exact", head: true })
           .eq("appointment_id", appt.id);
 
-        if (countErr) {
-          throw new Error(`Participant count failed for ${appt.id}: ${countErr.message}`);
+        if (!countRes) {
+          throw new Error(`Participant count returned undefined for ${appt.id}`);
         }
-        if ((count ?? 0) > 0) {
+        if (countRes.error) {
+          throw new Error(`Participant count failed for ${appt.id}: ${countRes.error.message}`);
+        }
+        if ((countRes.count ?? 0) > 0) {
           skipped++;
           results.push({ appointment_id: appt.id, status: "skipped", reason: "already_has_participants" });
           continue;
@@ -134,19 +240,10 @@ Deno.serve(async (req) => {
       }
 
       const data = await res.json();
+      // Empty array / empty participants means nobody attended — still mark checked.
       const participants: any[] = Array.isArray(data)
-        ? []
+        ? data
         : (data.participants ?? data.participant ?? []);
-
-      if (Array.isArray(data)) {
-        results.push({
-          appointment_id: appt.id,
-          status: "skipped",
-          reason: "API returned array instead of appointment detail",
-        });
-        skipped++;
-        continue;
-      }
 
       const sorted = [...participants].sort((a, b) => {
         if (a.canceled_at && !b.canceled_at) return 1;
@@ -175,7 +272,7 @@ Deno.serve(async (req) => {
           status = "waiting";
         }
 
-        const { error: upsertErr } = await supabase.from("appointment_participant").upsert(
+        const upsertRes = await supabase.from("appointment_participant").upsert(
           {
             appointment_id: String(appt.id),
             member_id: memberId,
@@ -186,21 +283,29 @@ Deno.serve(async (req) => {
           { onConflict: "appointment_id,member_id" }
         );
 
-        if (upsertErr) {
+        if (!upsertRes) {
           throw new Error(
-            `appointment_participant upsert failed for ${appt.id}/${memberId}: ${upsertErr.message}`
+            `appointment_participant upsert returned undefined for ${appt.id}/${memberId}`
+          );
+        }
+        if (upsertRes.error) {
+          throw new Error(
+            `appointment_participant upsert failed for ${appt.id}/${memberId}: ${upsertRes.error.message}`
           );
         }
         upserted++;
       }
 
-      const { error: checkErr } = await supabase
+      const checkRes = await supabase
         .from("appointment")
         .update({ checked: true })
         .eq("id", String(appt.id));
 
-      if (checkErr) {
-        throw new Error(`Failed to mark appointment ${appt.id} checked: ${checkErr.message}`);
+      if (!checkRes) {
+        throw new Error(`Failed to mark appointment ${appt.id} checked: undefined response`);
+      }
+      if (checkRes.error) {
+        throw new Error(`Failed to mark appointment ${appt.id} checked: ${checkRes.error.message}`);
       }
 
       fetched++;
@@ -212,14 +317,42 @@ Deno.serve(async (req) => {
       });
     }
 
+    let continued = false;
+    let nextAfter: AfterCursor | null = null;
+    if (hasMore && batch.length > 0) {
+      const last = batch[batch.length - 1];
+      nextAfter = {
+        start_date: last.start_date,
+        start_time: String(last.start_time).slice(0, 8),
+        id: String(last.id),
+      };
+      const nextBody = {
+        ...body,
+        from,
+        to,
+        force,
+        unchecked_only: uncheckedOnly,
+        limit,
+        after: nextAfter,
+      };
+      continued = true;
+      scheduleBackground(reinvokeSelf(nextBody));
+    }
+
     return new Response(
       JSON.stringify({
         from,
         to,
         force,
-        total: appointments?.length ?? 0,
+        unchecked_only: uncheckedOnly,
+        limit,
+        after,
+        total_remaining: filtered.length,
+        batch: batch.length,
         fetched,
         skipped,
+        continued,
+        next_after: nextAfter,
         results,
       }),
       { headers: { "Content-Type": "application/json" } }

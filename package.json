@@ -1,4 +1,12 @@
 {
+  "type": "module",
+  "scripts": {
+    "backfill:participants": "node scripts/backfill-appointment-participants.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.8",
+    "dotenv": "^17.4.2"
+  },
   "devDependencies": {
     "@types/deno": "^2.7.0"
   }
