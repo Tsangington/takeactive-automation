@@ -8,9 +8,13 @@ import {
   parseDateRange,
   sleep,
 } from "../_shared/takeactiveGroups.ts";
+import {
+  assignStatus,
+  classifyParticipant,
+  sortParticipants,
+} from "../_shared/participants.ts";
 
 const DEFAULT_LIMIT = 20;
-const FUNCTION_NAME = "backfill-appointment-participants";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -47,33 +51,6 @@ function isAfterCursor(
   after: AfterCursor
 ): boolean {
   return apptKey(appt) > apptKey(after);
-}
-
-function scheduleBackground(task: Promise<unknown>): void {
-  const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } })
-    .EdgeRuntime;
-  if (runtime?.waitUntil) {
-    runtime.waitUntil(task);
-  }
-}
-
-function reinvokeSelf(body: Record<string, unknown>): Promise<unknown> {
-  const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/${FUNCTION_NAME}`;
-  const key =
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY");
-  return fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  }).then(async (res) => {
-    const text = await res.text();
-    if (!res.ok) {
-      console.error(`reinvoke failed: ${res.status} ${text.slice(0, 300)}`);
-    }
-  });
 }
 
 async function syncUser(memberId: string, apiName: string): Promise<void> {
@@ -245,52 +222,60 @@ Deno.serve(async (req) => {
         ? data
         : (data.participants ?? data.participant ?? []);
 
-      const sorted = [...participants].sort((a, b) => {
-        if (a.canceled_at && !b.canceled_at) return 1;
-        if (!a.canceled_at && b.canceled_at) return -1;
-        return new Date(a.booked_at).getTime() - new Date(b.booked_at).getTime();
-      });
+      const clearRes = await supabase
+        .from("appointment_participant")
+        .delete()
+        .eq("appointment_id", String(appt.id));
+      if (!clearRes) {
+        throw new Error(`appointment_participant clear returned undefined for ${appt.id}`);
+      }
+      if (clearRes.error) {
+        throw new Error(
+          `appointment_participant clear failed for ${appt.id}: ${clearRes.error.message}`
+        );
+      }
 
+      const sorted = sortParticipants(participants);
       let attendedCount = 0;
       let upserted = 0;
 
       for (const p of sorted) {
-        const memberId = String(p.user_id ?? p.user?.id ?? "");
-        if (!memberId) continue;
+        const classified = classifyParticipant(p);
+        if (!classified) continue;
 
-        const memberName = p.user?.username ?? p.user?.name ?? "Unknown";
-        const isCancelled = !!p.canceled_at && p.canceled_at !== "";
-        await syncUser(memberId, memberName);
-
-        let status: string;
-        if (isCancelled) {
-          status = "cancelled";
-        } else if (attendedCount < appt.max_participants) {
-          status = "attended";
-          attendedCount++;
-        } else {
-          status = "waiting";
+        if (classified.participant_type === "member" && classified.member_id) {
+          await syncUser(classified.member_id, classified.member_name ?? "Unknown");
         }
+
+        const { status, nextAttendedCount } = assignStatus(
+          classified.is_cancelled,
+          attendedCount,
+          appt.max_participants
+        );
+        attendedCount = nextAttendedCount;
 
         const upsertRes = await supabase.from("appointment_participant").upsert(
           {
             appointment_id: String(appt.id),
-            member_id: memberId,
+            external_id: classified.external_id,
+            member_id: classified.member_id,
+            participant_type: classified.participant_type,
+            guest_username: classified.guest_username,
             status,
-            booked_at: p.booked_at,
-            canceled_at: p.canceled_at || null,
+            booked_at: classified.booked_at,
+            canceled_at: classified.canceled_at,
           },
-          { onConflict: "appointment_id,member_id" }
+          { onConflict: "appointment_id,external_id" }
         );
 
         if (!upsertRes) {
           throw new Error(
-            `appointment_participant upsert returned undefined for ${appt.id}/${memberId}`
+            `appointment_participant upsert returned undefined for ${appt.id}/${classified.external_id}`
           );
         }
         if (upsertRes.error) {
           throw new Error(
-            `appointment_participant upsert failed for ${appt.id}/${memberId}: ${upsertRes.error.message}`
+            `appointment_participant upsert failed for ${appt.id}/${classified.external_id}: ${upsertRes.error.message}`
           );
         }
         upserted++;
@@ -317,7 +302,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    let continued = false;
+    // No self-reinvoke — caller must POST again with `after: next_after` if has_more.
     let nextAfter: AfterCursor | null = null;
     if (hasMore && batch.length > 0) {
       const last = batch[batch.length - 1];
@@ -326,17 +311,6 @@ Deno.serve(async (req) => {
         start_time: String(last.start_time).slice(0, 8),
         id: String(last.id),
       };
-      const nextBody = {
-        ...body,
-        from,
-        to,
-        force,
-        unchecked_only: uncheckedOnly,
-        limit,
-        after: nextAfter,
-      };
-      continued = true;
-      scheduleBackground(reinvokeSelf(nextBody));
     }
 
     return new Response(
@@ -351,7 +325,7 @@ Deno.serve(async (req) => {
         batch: batch.length,
         fetched,
         skipped,
-        continued,
+        has_more: hasMore,
         next_after: nextAfter,
         results,
       }),

@@ -1,6 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getToken } from "../_shared/takeactiveAuth.ts";
 import { appointmentDetailUrl, groupForMaster } from "../_shared/takeactiveGroups.ts";
+import {
+  assignStatus,
+  classifyParticipant,
+  sortParticipants,
+} from "../_shared/participants.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -38,6 +43,69 @@ async function syncUser(memberId: string, apiName: string): Promise<void> {
 
     console.log(`Updated name for ${memberId}: "${existing.name}" → "${apiName}"`);
   }
+}
+
+async function syncAppointmentParticipants(
+  appt: { id: string; max_participants: number; master_company_id: string },
+  participants: any[]
+): Promise<number> {
+  // Replace the set for this appointment so removed/guest/deleted rows stay correct
+  // and pre-migration rows without external_id cannot collide on member_id.
+  const { error: clearErr } = await supabase
+    .from("appointment_participant")
+    .delete()
+    .eq("appointment_id", String(appt.id));
+  if (clearErr) {
+    throw new Error(
+      `appointment_participant clear failed for ${appt.id}: ${clearErr.message}`
+    );
+  }
+
+  const sorted = sortParticipants(participants);
+  let attendedCount = 0;
+  let upserted = 0;
+
+  for (const p of sorted) {
+    const classified = classifyParticipant(p);
+    if (!classified) {
+      console.error(`Participant missing id on appointment ${appt.id}`);
+      continue;
+    }
+
+    if (classified.participant_type === "member" && classified.member_id) {
+      await syncUser(classified.member_id, classified.member_name ?? "Unknown");
+    }
+
+    const { status, nextAttendedCount } = assignStatus(
+      classified.is_cancelled,
+      attendedCount,
+      appt.max_participants
+    );
+    attendedCount = nextAttendedCount;
+
+    const { error: upsertErr } = await supabase.from("appointment_participant").upsert(
+      {
+        appointment_id: String(appt.id),
+        external_id: classified.external_id,
+        member_id: classified.member_id,
+        participant_type: classified.participant_type,
+        guest_username: classified.guest_username,
+        status,
+        booked_at: classified.booked_at,
+        canceled_at: classified.canceled_at,
+      },
+      { onConflict: "appointment_id,external_id" }
+    );
+
+    if (upsertErr) {
+      throw new Error(
+        `appointment_participant upsert failed for ${appt.id}/${classified.external_id}: ${upsertErr.message}`
+      );
+    }
+    upserted++;
+  }
+
+  return upserted;
 }
 
 Deno.serve(async () => {
@@ -99,55 +167,7 @@ Deno.serve(async () => {
         ? data
         : (data.participants ?? data.participant ?? []);
 
-      const sorted = [...participants].sort((a, b) => {
-        if (a.canceled_at && !b.canceled_at) return 1;
-        if (!a.canceled_at && b.canceled_at) return -1;
-        return new Date(a.booked_at).getTime() - new Date(b.booked_at).getTime();
-      });
-
-      let attendedCount = 0;
-      let upserted = 0;
-
-      for (const p of sorted) {
-        const memberId = String(p.user_id ?? p.user?.id ?? "");
-        if (!memberId) {
-          console.error(`Participant missing user_id on appointment ${appt.id}`);
-          continue;
-        }
-
-        const memberName = p.user?.username ?? p.user?.name ?? "Unknown";
-        const isCancelled = !!p.canceled_at && p.canceled_at !== "";
-
-        await syncUser(memberId, memberName);
-
-        let status: string;
-        if (isCancelled) {
-          status = "cancelled";
-        } else if (attendedCount < appt.max_participants) {
-          status = "attended";
-          attendedCount++;
-        } else {
-          status = "waiting";
-        }
-
-        const { error: upsertErr } = await supabase.from("appointment_participant").upsert(
-          {
-            appointment_id: String(appt.id),
-            member_id: memberId,
-            status,
-            booked_at: p.booked_at,
-            canceled_at: p.canceled_at || null,
-          },
-          { onConflict: "appointment_id,member_id" }
-        );
-
-        if (upsertErr) {
-          throw new Error(
-            `appointment_participant upsert failed for ${appt.id}/${memberId}: ${upsertErr.message}`
-          );
-        }
-        upserted++;
-      }
+      const upserted = await syncAppointmentParticipants(appt, participants);
 
       const { error: checkErr } = await supabase
         .from("appointment")
@@ -168,7 +188,7 @@ Deno.serve(async () => {
 
     const succeeded = results.filter((r) => r.status === "ok").length;
     if (succeeded > 0) {
-      await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/sync-sheet`, {
+      await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/sync-estimate`, {
         method: "POST",
         headers: { Authorization: `Bearer ${Deno.env.get("SUPABASE_ANON_KEY")}` },
       });

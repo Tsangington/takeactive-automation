@@ -1,7 +1,8 @@
 {
   "type": "module",
   "scripts": {
-    "backfill:participants": "node scripts/backfill-appointment-participants.mjs"
+    "backfill:participants": "node scripts/backfill-appointment-participants.mjs",
+    "check:upcoming": "node scripts/check-upcoming-appointments.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.8",

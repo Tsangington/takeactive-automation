@@ -10,10 +10,16 @@
  */
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
+// Keep in sync with supabase/functions/_shared/participants.ts
+import {
+  assignStatus,
+  classifyParticipant,
+  sortParticipants,
+} from "./lib/participants.mjs";
 
 const TAKEACTIVE_DELAY_MS = 3000;
 const BATCH_SIZE = 20;
-const BATCH_DELAY_MS = 60_000;
+const BATCH_DELAY_MS = 10_000;
 const TAKEACTIVE_GROUPS = [
   { master: "BADMINTON-TREPTOW", slug: "badminton-treptow" },
   { master: "VFB-KIEFHOLZ-LEAGUE-TEAM", slug: "vfb-kiefholz-league-team" },
@@ -288,43 +294,51 @@ async function main() {
           ? data
           : (data.participants ?? data.participant ?? []);
 
-        const sorted = [...participants].sort((a, b) => {
-          if (a.canceled_at && !b.canceled_at) return 1;
-          if (!a.canceled_at && b.canceled_at) return -1;
-          return new Date(a.booked_at).getTime() - new Date(b.booked_at).getTime();
-        });
+        const { error: clearErr } = await supabase
+          .from("appointment_participant")
+          .delete()
+          .eq("appointment_id", String(appt.id));
+        if (clearErr) {
+          throw new Error(
+            `appointment_participant clear failed for ${appt.id}: ${clearErr.message}`
+          );
+        }
 
+        const sorted = sortParticipants(participants);
         let attendedCount = 0;
         let upserted = 0;
 
         for (const p of sorted) {
-          const memberId = String(p.user_id ?? p.user?.id ?? "");
-          if (!memberId) continue;
+          const classified = classifyParticipant(p);
+          if (!classified) continue;
 
-          const memberName = p.user?.username ?? p.user?.name ?? "Unknown";
-          const isCancelled = !!p.canceled_at && p.canceled_at !== "";
-          await syncUser(supabase, memberId, memberName);
+          if (classified.participant_type === "member" && classified.member_id) {
+            await syncUser(supabase, classified.member_id, classified.member_name ?? "Unknown");
+          }
 
-          let status;
-          if (isCancelled) status = "cancelled";
-          else if (attendedCount < appt.max_participants) {
-            status = "attended";
-            attendedCount++;
-          } else status = "waiting";
+          const { status, nextAttendedCount } = assignStatus(
+            classified.is_cancelled,
+            attendedCount,
+            appt.max_participants
+          );
+          attendedCount = nextAttendedCount;
 
           const { error: upsertErr } = await supabase.from("appointment_participant").upsert(
             {
               appointment_id: String(appt.id),
-              member_id: memberId,
+              external_id: classified.external_id,
+              member_id: classified.member_id,
+              participant_type: classified.participant_type,
+              guest_username: classified.guest_username,
               status,
-              booked_at: p.booked_at,
-              canceled_at: p.canceled_at || null,
+              booked_at: classified.booked_at,
+              canceled_at: classified.canceled_at,
             },
-            { onConflict: "appointment_id,member_id" }
+            { onConflict: "appointment_id,external_id" }
           );
           if (upsertErr) {
             throw new Error(
-              `appointment_participant upsert failed for ${appt.id}/${memberId}: ${upsertErr.message}`
+              `appointment_participant upsert failed for ${appt.id}/${classified.external_id}: ${upsertErr.message}`
             );
           }
           upserted++;

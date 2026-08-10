@@ -23,9 +23,15 @@ type Body = {
   /** Inclusive page range alternative to `pages` */
   page_from?: number;
   page_to?: number;
+  /** Date mode: first history page to fetch (default 1). */
+  page?: number;
+  /** Date mode: max pages per invoke (default 15). No self-reinvoke — call again with page=next_page. */
+  max_pages?: number;
   /** Optional: only one company (master id or slug) */
   master?: string;
 };
+
+const DEFAULT_MAX_PAGES = 15;
 
 function resolveGroups(body: Body): TakeActiveGroup[] {
   if (!body.master) return TAKEACTIVE_GROUPS;
@@ -150,13 +156,17 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Date mode: walk pages newest → oldest until past `from`.
-      let page = 1;
+      // Date mode: fetch at most max_pages per invoke (no self-reinvoke).
+      const startPage = Number(body.page) > 0 ? Math.floor(Number(body.page)) : 1;
+      const maxPages =
+        Number(body.max_pages) > 0 ? Math.floor(Number(body.max_pages)) : DEFAULT_MAX_PAGES;
+      let page = startPage;
       let upserted = 0;
       let pagesFetched = 0;
-      let stoppedReason = "empty_page";
+      let stoppedReason = "max_pages";
+      let nextPage: number | null = null;
 
-      while (true) {
+      for (let i = 0; i < maxPages; i++) {
         if (callIndex++ > 0) await sleep(TAKEACTIVE_DELAY_MS);
 
         const token = await getToken();
@@ -175,6 +185,7 @@ Deno.serve(async (req) => {
 
         if (!Array.isArray(items) || items.length === 0) {
           stoppedReason = "empty_page";
+          nextPage = null;
           break;
         }
 
@@ -195,10 +206,15 @@ Deno.serve(async (req) => {
         });
         if (allBeforeFrom) {
           stoppedReason = "before_from";
+          nextPage = null;
           break;
         }
 
         page++;
+        nextPage = page;
+        if (i === maxPages - 1) {
+          stoppedReason = "max_pages";
+        }
       }
 
       results.push({
@@ -206,9 +222,12 @@ Deno.serve(async (req) => {
         mode,
         from,
         to,
+        page_start: startPage,
         pages: pagesFetched,
         upserted,
         stopped_reason: stoppedReason,
+        next_page: nextPage,
+        has_more: nextPage != null,
       });
     }
 
