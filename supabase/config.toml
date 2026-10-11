@@ -54,3 +54,9 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/backfill-appointment-participants/deno.json"
 entrypoint = "./functions/backfill-appointment-participants/index.ts"
+
+[functions.book-appointments]
+enabled = true
+verify_jwt = false
+import_map = "./functions/book-appointments/deno.json"
+entrypoint = "./functions/book-appointments/index.ts"

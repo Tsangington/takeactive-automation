@@ -5,6 +5,7 @@ import {
   TAKEACTIVE_DELAY_MS,
   TakeActiveGroup,
   berlinToday,
+  bookableColumns,
   historyUrl,
   parseDateRange,
   sleep,
@@ -78,6 +79,7 @@ function toRows(items: any[], from?: string, to?: string) {
       start_time: a.appointment.split("T")[1],
       max_participants: a.max_participant,
       master_company_id: a.master_company_id,
+      ...bookableColumns(a),
     }));
 }
 

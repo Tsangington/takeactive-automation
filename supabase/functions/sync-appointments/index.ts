@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { bookableColumns } from "../_shared/takeactiveGroups.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -66,6 +67,7 @@ Deno.serve(async () => {
       start_time: a.appointment.split("T")[1],
       max_participants: a.max_participant,
       master_company_id: a.master_company_id,
+      ...bookableColumns(a),
     }));
 
     const { error } = await supabase
