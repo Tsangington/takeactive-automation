@@ -8,6 +8,7 @@
  *   node scripts/bookings.mjs plans
  *   node scripts/bookings.mjs remove --plan=<uuid>
  *   node scripts/bookings.mjs cancel --id=110911
+ *   node scripts/bookings.mjs help
  *
  * Required env (.env supported):
  *   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
@@ -251,12 +252,20 @@ async function cancel(argv) {
 
 function usage() {
   console.log(`Usage:
-  node scripts/bookings.mjs list
-  node scripts/bookings.mjs add --id=<appointment id>
-  node scripts/bookings.mjs add --id=<appointment id> --weekly
-  node scripts/bookings.mjs plans
-  node scripts/bookings.mjs remove --plan=<uuid>
-  node scripts/bookings.mjs cancel --id=<appointment id>`);
+  list
+    upcoming appointments: name, session time, bookable from, id
+  add --id=<appointment id>
+    book that appointment once, when its window opens
+  add --id=<appointment id> --weekly
+    book every week at that weekday, start time, and duration
+  plans
+    enabled plans and each upcoming match
+  remove --plan=<uuid>
+    stop a plan
+  cancel --id=<appointment id>
+    cancel a booked appointment
+  help
+    show this reminder`);
 }
 
 async function main() {
@@ -266,6 +275,7 @@ async function main() {
   else if (command === "plans") await plans();
   else if (command === "remove") await remove(argv);
   else if (command === "cancel") await cancel(argv);
+  else if (command === "help") usage();
   else {
     usage();
     process.exit(command ? 1 : 0);
