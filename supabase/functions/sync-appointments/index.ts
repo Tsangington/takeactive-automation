@@ -67,6 +67,7 @@ Deno.serve(async () => {
       start_time: a.appointment.split("T")[1],
       max_participants: a.max_participant,
       master_company_id: a.master_company_id,
+      duration: Number.isFinite(Number(a.duration)) ? Number(a.duration) : null,
       ...bookableColumns(a),
     }));
 

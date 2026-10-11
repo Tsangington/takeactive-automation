@@ -5,6 +5,7 @@ import {
   acceptUrl,
   appointmentListUrl,
   berlinNaiveToMs,
+  berlinToday,
   cancelUrl,
   sleep,
 } from "../_shared/takeactiveGroups.ts";
@@ -56,6 +57,13 @@ type Target = {
   openMs: number;
 };
 
+type StoredAppointment = {
+  id: string;
+  start_date: string;
+  start_time: string;
+  duration: number | null;
+};
+
 function clock(value: string): string {
   const time = value.includes("T") ? value.split("T")[1] : value;
   const [hh = "00", mm = "00", ss = "00"] = time.split(":");
@@ -92,6 +100,66 @@ function matchesWeekly(appointment: LiveAppointment, plan: Plan): boolean {
   return weekdayOf(appointment.appointment) === Number(plan.weekday) &&
     clock(appointment.appointment) === clock(String(plan.start_time)) &&
     Number(appointment.duration) === Number(plan.duration);
+}
+
+function matchesStored(appointment: StoredAppointment, plan: Plan): boolean {
+  if (plan.weekday == null || plan.start_time == null || plan.duration == null) return false;
+  if (appointment.duration == null || !appointment.start_date || !appointment.start_time) return false;
+  const start = `${String(appointment.start_date).slice(0, 10)}T${clock(String(appointment.start_time))}`;
+  if (berlinNaiveToMs(start) < Date.now()) return false;
+  return weekdayOf(String(appointment.start_date)) === Number(plan.weekday) &&
+    clock(String(appointment.start_time)) === clock(String(plan.start_time)) &&
+    Number(appointment.duration) === Number(plan.duration);
+}
+
+/** Attach newly synced appointments to enabled weekly plans. Does not accept. */
+async function enrollWeekly(): Promise<Array<{ plan_id: string; appointment_id: string }>> {
+  const { data: plans, error: planError } = await supabase
+    .from("booking_plan")
+    .select("id, kind, appointment_id, weekday, start_time, duration")
+    .eq("kind", "weekly")
+    .eq("enabled", true);
+  if (planError) throw new Error(planError.message);
+  const weekly = (plans ?? []) as Plan[];
+  if (weekly.length === 0) return [];
+
+  const { data: appointments, error: appointmentError } = await supabase
+    .from("appointment")
+    .select("id, start_date, start_time, duration")
+    .gte("start_date", berlinToday());
+  if (appointmentError) throw new Error(appointmentError.message);
+
+  const { data: attemptRows, error: attemptError } = await supabase
+    .from("booking_attempt")
+    .select("plan_id, appointment_id")
+    .in("plan_id", weekly.map((plan) => plan.id));
+  if (attemptError) throw new Error(attemptError.message);
+  const existing = new Set(
+    (attemptRows ?? []).map((row) => `${row.plan_id}:${row.appointment_id}`)
+  );
+
+  const rows = [];
+  for (const plan of weekly) {
+    for (const appointment of (appointments ?? []) as StoredAppointment[]) {
+      const appointmentId = String(appointment.id);
+      if (existing.has(`${plan.id}:${appointmentId}`)) continue;
+      if (!matchesStored(appointment, plan)) continue;
+      rows.push({
+        plan_id: plan.id,
+        appointment_id: appointmentId,
+        status: "scheduled",
+        error: null,
+      });
+    }
+  }
+  if (rows.length === 0) return [];
+
+  const { error } = await supabase.from("booking_attempt").upsert(rows, {
+    onConflict: "plan_id,appointment_id",
+    ignoreDuplicates: true,
+  });
+  if (error) throw new Error(error.message);
+  return rows.map((row) => ({ plan_id: row.plan_id, appointment_id: row.appointment_id }));
 }
 
 function targetsFor(plan: Plan, live: LiveAppointment[]): LiveAppointment[] {
@@ -344,6 +412,11 @@ Deno.serve(async (req) => {
     if (req.method !== "GET") {
       const text = await req.text();
       if (text.trim()) body = JSON.parse(text);
+    }
+
+    if (body.action === "enroll") {
+      const enrolled = await enrollWeekly();
+      return new Response(JSON.stringify({ enrolled }), { headers: jsonHeaders });
     }
 
     const token = await getToken();

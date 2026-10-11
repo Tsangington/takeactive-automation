@@ -76,6 +76,17 @@ function describe(appointment) {
   return `${appointment.name} | ${sessionLabel(appointment.appointment)} | bookable from ${sessionLabel(appointment.bookable_from_date)} | id ${appointment.id}${declined}`;
 }
 
+function describeStored(row) {
+  const session = `${String(row.start_date).slice(0, 10)} ${String(row.start_time).slice(0, 5)}`;
+  const bookable = row.bookable_from_at ? sessionLabel(row.bookable_from_at) : "unknown";
+  return `${row.name} | ${session} | bookable from ${bookable} | id ${row.id}`;
+}
+
+function stillUpcoming(row) {
+  if (!row?.start_date || !row?.start_time) return false;
+  return berlinNaiveToMs(`${String(row.start_date).slice(0, 10)}T${clock(String(row.start_time))}`) >= Date.now();
+}
+
 function matchesWeekly(appointment, plan) {
   if (appointment.status !== "ACTIVE" || appointment.is_decline) return false;
   return weekdayOf(appointment.appointment) === Number(plan.weekday) &&
@@ -191,9 +202,20 @@ async function plans() {
     .select("plan_id, appointment_id, status")
     .in("plan_id", enabled.map((p) => p.id));
   if (attemptError) throw new Error(attemptError.message);
+  const attemptList = attemptRows ?? [];
   const attempts = new Map(
-    (attemptRows ?? []).map((a) => [`${a.plan_id}:${a.appointment_id}`, a.status])
+    attemptList.map((a) => [`${a.plan_id}:${a.appointment_id}`, a.status])
   );
+  const storedIds = [...new Set(attemptList.map((a) => String(a.appointment_id)))];
+  const storedById = new Map();
+  if (storedIds.length > 0) {
+    const { data: storedRows, error: storedError } = await db
+      .from("appointment")
+      .select("id, name, start_date, start_time, bookable_from_at")
+      .in("id", storedIds);
+    if (storedError) throw new Error(storedError.message);
+    for (const row of storedRows ?? []) storedById.set(String(row.id), row);
+  }
 
   const upcoming = await fetchUpcoming(await login());
   for (const plan of enabled) {
@@ -202,10 +224,18 @@ async function plans() {
         `weekly ${DAYS[plan.weekday]} ${String(plan.start_time).slice(0, 5)} ${plan.duration}min | plan ${plan.id}`
       );
       const matches = upcoming.filter((a) => matchesWeekly(a, plan));
-      if (matches.length === 0) console.log("  no upcoming match");
+      const liveIds = new Set(matches.map((a) => String(a.id)));
+      const enrolled = attemptList
+        .filter((a) => a.plan_id === plan.id && !liveIds.has(String(a.appointment_id)))
+        .map((attempt) => ({ attempt, row: storedById.get(String(attempt.appointment_id)) }))
+        .filter((item) => stillUpcoming(item.row));
+      if (matches.length === 0 && enrolled.length === 0) console.log("  no upcoming match");
       for (const appointment of matches) {
         const status = attempts.get(`${plan.id}:${appointment.id}`) ?? "scheduled";
         console.log(`  ${describe(appointment)} | ${status}`);
+      }
+      for (const { attempt, row } of enrolled) {
+        console.log(`  ${describeStored(row)} | ${attempt.status}`);
       }
       continue;
     }
