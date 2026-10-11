@@ -71,6 +71,17 @@ export function sortParticipants<T extends { canceled_at?: string | null; booked
   });
 }
 
+/** Decline fields from an appointment-shaped TakeActive detail payload (not a participant array). */
+export function declineFieldsFromDetail(
+  data: any
+): { is_decline: boolean; decline_message: string | null } | null {
+  if (data == null || Array.isArray(data)) return null;
+  return {
+    is_decline: !!data.is_decline,
+    decline_message: data.decline_message ? String(data.decline_message) : null,
+  };
+}
+
 /** Assign attended/waiting/cancelled; guests and deleted consume capacity. */
 export function assignStatus(
   isCancelled: boolean,

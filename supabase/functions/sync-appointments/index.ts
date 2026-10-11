@@ -68,6 +68,8 @@ Deno.serve(async () => {
       max_participants: a.max_participant,
       master_company_id: a.master_company_id,
       duration: Number.isFinite(Number(a.duration)) ? Number(a.duration) : null,
+      is_decline: !!a.is_decline,
+      decline_message: a.decline_message ? String(a.decline_message) : null,
       ...bookableColumns(a),
     }));
 

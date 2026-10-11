@@ -2,6 +2,7 @@
   "type": "module",
   "scripts": {
     "backfill:participants": "node scripts/backfill-appointment-participants.mjs",
+    "stamp:declined": "node scripts/stamp-declined-appointments.mjs",
     "check:upcoming": "node scripts/check-upcoming-appointments.mjs",
     "bookings": "node scripts/bookings.mjs"
   },

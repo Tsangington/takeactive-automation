@@ -11,6 +11,7 @@ import {
 import {
   assignStatus,
   classifyParticipant,
+  declineFieldsFromDetail,
   sortParticipants,
 } from "../_shared/participants.ts";
 
@@ -281,9 +282,10 @@ Deno.serve(async (req) => {
         upserted++;
       }
 
+      const decline = declineFieldsFromDetail(data);
       const checkRes = await supabase
         .from("appointment")
-        .update({ checked: true })
+        .update({ checked: true, ...(decline ?? {}) })
         .eq("id", String(appt.id));
 
       if (!checkRes) {

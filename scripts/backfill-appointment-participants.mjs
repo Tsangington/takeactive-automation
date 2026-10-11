@@ -14,6 +14,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   assignStatus,
   classifyParticipant,
+  declineFieldsFromDetail,
   sortParticipants,
 } from "./lib/participants.mjs";
 
@@ -344,9 +345,10 @@ async function main() {
           upserted++;
         }
 
+        const decline = declineFieldsFromDetail(data);
         const { error: checkErr } = await supabase
           .from("appointment")
-          .update({ checked: true })
+          .update({ checked: true, ...(decline ?? {}) })
           .eq("id", String(appt.id));
         if (checkErr) throw new Error(`Failed to mark ${appt.id} checked: ${checkErr.message}`);
 

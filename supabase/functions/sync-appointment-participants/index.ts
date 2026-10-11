@@ -4,6 +4,7 @@ import { appointmentDetailUrl, groupForMaster } from "../_shared/takeactiveGroup
 import {
   assignStatus,
   classifyParticipant,
+  declineFieldsFromDetail,
   sortParticipants,
 } from "../_shared/participants.ts";
 
@@ -169,9 +170,10 @@ Deno.serve(async () => {
 
       const upserted = await syncAppointmentParticipants(appt, participants);
 
+      const decline = declineFieldsFromDetail(data);
       const { error: checkErr } = await supabase
         .from("appointment")
-        .update({ checked: true })
+        .update({ checked: true, ...(decline ?? {}) })
         .eq("id", String(appt.id));
 
       if (checkErr) {

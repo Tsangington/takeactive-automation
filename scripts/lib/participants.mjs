@@ -56,6 +56,14 @@ export function sortParticipants(participants) {
   });
 }
 
+export function declineFieldsFromDetail(data) {
+  if (data == null || Array.isArray(data)) return null;
+  return {
+    is_decline: !!data.is_decline,
+    decline_message: data.decline_message ? String(data.decline_message) : null,
+  };
+}
+
 export function assignStatus(isCancelled, attendedCount, maxParticipants) {
   if (isCancelled) {
     return { status: "cancelled", nextAttendedCount: attendedCount };

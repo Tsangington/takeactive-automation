@@ -432,6 +432,7 @@ async function fetchYearParticipants(yearFrom: string, yearTo: string) {
       .select("member_id, status, appointment!inner(start_date)")
       .eq("participant_type", "member")
       .not("member_id", "is", null)
+      .eq("appointment.is_decline", false)
       .gte("appointment.start_date", yearFrom)
       .lt("appointment.start_date", yearTo)
       .order("member_id", { ascending: true })
