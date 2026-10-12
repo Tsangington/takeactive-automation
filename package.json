@@ -11,6 +11,7 @@
     "dotenv": "^17.4.2"
   },
   "devDependencies": {
-    "@types/deno": "^2.7.0"
+    "@types/deno": "^2.7.0",
+    "supabase": "^2.120.0"
   }
 }

@@ -16,7 +16,7 @@ const supabase = createClient(
 );
 
 const WARM_MS = 60_000;
-const PENDING_STALE_MS = 3 * 60_000;
+const PENDING_STALE_MS = 70_000;
 const jsonHeaders = { "Content-Type": "application/json" };
 
 type LiveAppointment = {
@@ -86,12 +86,20 @@ function firebaseUserId(idToken: string): string {
   return String(id);
 }
 
-function alreadyBooked(appointment: LiveAppointment, userId: string): boolean {
-  return (appointment.participants ?? []).some((p) => {
+function participantFor(appointment: LiveAppointment, userId: string) {
+  return (appointment.participants ?? []).find((p) => {
     const id = p.user_id ?? p.user?.id;
-    if (id == null || String(id) !== userId) return false;
-    return !p.canceled_at;
+    return id != null && String(id) === userId;
   });
+}
+
+function alreadyBooked(appointment: LiveAppointment, userId: string): boolean {
+  const participant = participantFor(appointment, userId);
+  return !!participant && !participant.canceled_at;
+}
+
+function userCancelled(appointment: LiveAppointment, userId: string): boolean {
+  return !!participantFor(appointment, userId)?.canceled_at;
 }
 
 function matchesWeekly(appointment: LiveAppointment, plan: Plan): boolean {
@@ -258,11 +266,88 @@ async function recordResult(
   };
 }
 
+async function markCancelled(planId: string, appointmentId: string): Promise<void> {
+  const { error } = await supabase.from("booking_attempt").upsert({
+    plan_id: planId,
+    appointment_id: appointmentId,
+    status: "cancelled",
+    error: null,
+    attempted_at: new Date().toISOString(),
+  }, { onConflict: "plan_id,appointment_id" });
+  if (error) throw new Error(error.message);
+}
+
 async function acceptTargets(token: string, targets: Target[]) {
   return await Promise.all(targets.map(async (target) => {
+    const appointmentId = String(target.appointment.id);
+    const { data, error } = await supabase
+      .from("booking_attempt")
+      .select("status")
+      .eq("plan_id", target.planId)
+      .eq("appointment_id", appointmentId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (data?.status !== "pending") {
+      return {
+        plan_id: target.planId,
+        appointment_id: appointmentId,
+        status: data?.status ?? "skipped",
+        error: null,
+      };
+    }
     const result = await postAccept(token, target.appointment);
     return await recordResult(target, result);
   }));
+}
+
+async function rememberCancellation(appointmentId: string, live: LiveAppointment | undefined) {
+  const { data: plans, error } = await supabase
+    .from("booking_plan")
+    .select("id, kind, appointment_id, weekday, start_time, duration")
+    .eq("enabled", true);
+  if (error) throw new Error(error.message);
+
+  let start = live?.appointment ?? null;
+  let duration = live?.duration ?? null;
+  if (!start || duration == null) {
+    const { data, error: appointmentError } = await supabase
+      .from("appointment")
+      .select("start_date, start_time, duration")
+      .eq("id", appointmentId)
+      .maybeSingle();
+    if (appointmentError) throw new Error(appointmentError.message);
+    if (data?.start_date && data?.start_time) {
+      start = `${String(data.start_date).slice(0, 10)}T${String(data.start_time)}`;
+      duration = data.duration;
+    }
+  }
+
+  const rows = [];
+  for (const plan of (plans ?? []) as Plan[]) {
+    const matchesOnce = plan.kind === "once" && String(plan.appointment_id) === appointmentId;
+    const matchesWeek = plan.kind === "weekly" &&
+      start != null &&
+      duration != null &&
+      plan.weekday != null &&
+      plan.start_time != null &&
+      plan.duration != null &&
+      weekdayOf(start) === Number(plan.weekday) &&
+      clock(start) === clock(String(plan.start_time)) &&
+      Number(duration) === Number(plan.duration);
+    if (!matchesOnce && !matchesWeek) continue;
+    rows.push({
+      plan_id: plan.id,
+      appointment_id: appointmentId,
+      status: "cancelled",
+      error: null,
+      attempted_at: new Date().toISOString(),
+    });
+  }
+  if (rows.length === 0) return;
+  const { error: upsertError } = await supabase.from("booking_attempt").upsert(rows, {
+    onConflict: "plan_id,appointment_id",
+  });
+  if (upsertError) throw new Error(upsertError.message);
 }
 
 async function cancelAppointment(token: string, appointmentId: string, live: LiveAppointment[]) {
@@ -305,6 +390,7 @@ async function cancelAppointment(token: string, appointmentId: string, live: Liv
     })
     .eq("appointment_id", appointmentId);
   if (error) throw new Error(error.message);
+  await rememberCancellation(appointmentId, fromList);
 
   return new Response(JSON.stringify({ cancelled: appointmentId, body: text.slice(0, 300) }), {
     headers: jsonHeaders,
@@ -340,6 +426,12 @@ async function bookDuePlans(token: string, userId: string, live: LiveAppointment
   for (const plan of enabled) {
     for (const appointment of targetsFor(plan, live)) {
       const appointmentId = String(appointment.id);
+      if (userCancelled(appointment, userId)) {
+        if (attempts.get(`${plan.id}:${appointmentId}`)?.status !== "cancelled") {
+          await markCancelled(plan.id, appointmentId);
+        }
+        continue;
+      }
       if (alreadyBooked(appointment, userId)) continue;
       if (attemptBlocked(attempts.get(`${plan.id}:${appointmentId}`))) continue;
       if (!appointment.bookable_from_date) continue;
@@ -434,7 +526,20 @@ Deno.serve(async (req) => {
     }
 
     const userId = firebaseUserId(token);
-    const { results, waiting } = await bookDuePlans(token, userId, live);
+    const booking = bookDuePlans(token, userId, live);
+    const edge = (globalThis as { EdgeRuntime?: { waitUntil: (promise: Promise<unknown>) => void } }).EdgeRuntime;
+    if (body.action === "book" && edge?.waitUntil) {
+      // Return before the wait so the minute cron can disconnect. Login and the
+      // sleep until bookable_from_date stay running on this worker.
+      edge.waitUntil(booking.then((result) => {
+        console.log(JSON.stringify(result));
+      }).catch((err) => {
+        console.error(err instanceof Error ? err.message : String(err));
+      }));
+      return new Response(JSON.stringify({ started: true }), { headers: jsonHeaders });
+    }
+
+    const { results, waiting } = await booking;
     return new Response(JSON.stringify({ results, waiting }), { headers: jsonHeaders });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
